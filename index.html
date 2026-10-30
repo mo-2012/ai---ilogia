@@ -1,0 +1,91 @@
+<!DOCTYPE html>
+<html lang="ar" dir="rtl">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
+<title>مساعد ilogia الدراسي</title>
+<meta name="description" content="مساعد دراسي عربي من ilogia: اشرح، لخّص، بسّط، ودرّب نفسك على أسئلة من مذاكرتك.">
+<meta name="theme-color" content="#136F58">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=IBM+Plex+Sans+Arabic:wght@400;500;600;700&display=swap" rel="stylesheet">
+<link rel="stylesheet" href="style.css">
+<script src="config.js"></script>
+</head>
+<body>
+<svg width="0" height="0" style="position:absolute" aria-hidden="true">
+  <defs>
+    <symbol id="i-plus" viewBox="0 0 24 24"><path d="M5 12h14M12 5v14"/></symbol>
+    <symbol id="i-send" viewBox="0 0 24 24"><path d="m22 2-7 20-4-9-9-4Z"/><path d="M22 2 11 13"/></symbol>
+    <symbol id="i-clip" viewBox="0 0 24 24"><path d="m21.44 11.05-9.19 9.19a6 6 0 0 1-8.49-8.49l8.57-8.57A4 4 0 1 1 18 8.84l-8.59 8.57a2 2 0 0 1-2.83-2.83l8.49-8.48"/></symbol>
+    <symbol id="i-trash" viewBox="0 0 24 24"><path d="M3 6h18M8 6V4h8v2M6 6l1 14h10l1-14"/></symbol>
+    <symbol id="i-x" viewBox="0 0 24 24"><path d="M18 6 6 18M6 6l12 12"/></symbol>
+    <symbol id="i-menu" viewBox="0 0 24 24"><path d="M4 6h16M4 12h16M4 18h16"/></symbol>
+    <symbol id="i-bulb" viewBox="0 0 24 24"><path d="M9 18h6M10 22h4M12 2a7 7 0 0 0-4 12.7c.6.5 1 1.3 1 2.3h6c0-1 .4-1.8 1-2.3A7 7 0 0 0 12 2Z"/></symbol>
+    <symbol id="i-file" viewBox="0 0 24 24"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8Z"/><path d="M14 2v6h6M8 13h8M8 17h5"/></symbol>
+    <symbol id="i-help" viewBox="0 0 24 24"><circle cx="12" cy="12" r="10"/><path d="M9.1 9a3 3 0 0 1 5.8 1c0 2-3 3-3 3M12 17h.01"/></symbol>
+    <symbol id="i-lines" viewBox="0 0 24 24"><path d="M17 10H3M21 6H3M21 14H3M17 18H3"/></symbol>
+    <symbol id="i-cap" viewBox="0 0 24 24"><path d="m22 10-10-5L2 10l10 5Z"/><path d="M6 12v5c3 2 9 2 12 0v-5"/></symbol>
+  </defs>
+</svg>
+
+<div class="shell" id="shell">
+  <aside class="side" id="side" aria-label="المحادثات السابقة">
+    <div class="brand">
+      <svg class="ic"><use href="#i-cap"/></svg>
+      <div><strong>ilogia</strong><span>المساعد الدراسي</span></div>
+      <button class="icon-btn only-mobile" id="closeSide" aria-label="إغلاق القائمة"><svg class="ic"><use href="#i-x"/></svg></button>
+    </div>
+    <button class="btn primary block" id="newChat"><svg class="ic"><use href="#i-plus"/></svg>محادثة جديدة</button>
+    <nav class="history" id="history" aria-label="سجل المحادثات"></nav>
+    <a class="back" href="https://ilogia-eg.com/">العودة إلى ilogia</a>
+  </aside>
+  <div class="scrim" id="scrim"></div>
+
+  <main class="main">
+    <header class="top">
+      <button class="icon-btn only-mobile" id="openSide" aria-label="فتح القائمة"><svg class="ic"><use href="#i-menu"/></svg></button>
+      <label class="field">
+        <span>المادة</span>
+        <select id="subject">
+          <option value="عام">عام</option>
+          <option value="اللغة العربية">اللغة العربية</option>
+          <option value="اللغة الإنجليزية">اللغة الإنجليزية</option>
+          <option value="الرياضيات">الرياضيات</option>
+          <option value="العلوم">العلوم</option>
+          <option value="الفيزياء">الفيزياء</option>
+          <option value="الكيمياء">الكيمياء</option>
+          <option value="الأحياء">الأحياء</option>
+          <option value="التاريخ">التاريخ</option>
+          <option value="الجغرافيا">الجغرافيا</option>
+        </select>
+      </label>
+      <span class="status" id="status" role="status"></span>
+    </header>
+
+    <section class="thread" id="thread" aria-live="polite"></section>
+
+    <footer class="composer">
+      <div class="modes" role="radiogroup" aria-label="نوع المساعدة" id="modes">
+        <button role="radio" data-mode="explain" aria-checked="true"><svg class="ic"><use href="#i-bulb"/></svg>اشرح</button>
+        <button role="radio" data-mode="summarize" aria-checked="false"><svg class="ic"><use href="#i-file"/></svg>لخّص</button>
+        <button role="radio" data-mode="simplify" aria-checked="false"><svg class="ic"><use href="#i-lines"/></svg>بسّط</button>
+        <button role="radio" data-mode="practice" aria-checked="false"><svg class="ic"><use href="#i-help"/></svg>اختبرني</button>
+      </div>
+      <div class="chip-row" id="chipRow" hidden>
+        <span class="chip"><svg class="ic"><use href="#i-clip"/></svg><span id="chipName"></span>
+          <button id="chipRemove" aria-label="إزالة الملف"><svg class="ic"><use href="#i-x"/></svg></button></span>
+      </div>
+      <form id="form" class="box">
+        <button type="button" class="icon-btn" id="attach" aria-label="إرفاق ملف نصي"><svg class="ic"><use href="#i-clip"/></svg></button>
+        <input type="file" id="file" accept=".txt,.md,text/plain" hidden>
+        <textarea id="input" rows="1" placeholder="اكتب سؤالك أو الصق نص الدرس هنا" aria-label="رسالتك"></textarea>
+        <button class="btn primary send" id="send" type="submit" aria-label="إرسال"><svg class="ic"><use href="#i-send"/></svg></button>
+      </form>
+      <p class="hint" id="hint"></p>
+    </footer>
+  </main>
+</div>
+<script src="app.js"></script>
+</body>
+</html>
