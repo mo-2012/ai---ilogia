@@ -25,6 +25,16 @@
   function save() {
     try { localStorage.setItem(KEY, JSON.stringify(state.chats)); } catch (e) {}
   }
+  // معرّف مجهول ثابت للطالب (يُحفظ في المتصفح) لربط تقدّمه في قاعدة البيانات
+  function sid() {
+    var k = "ilogia_student_id", v = null;
+    try { v = localStorage.getItem(k); } catch (e) {}
+    if (!v || !/^[a-zA-Z0-9-]{16,64}$/.test(v)) {
+      v = (window.crypto && crypto.randomUUID) ? crypto.randomUUID() : (uid() + uid() + uid());
+      try { localStorage.setItem(k, v); } catch (e) {}
+    }
+    return v;
+  }
   function uid() { return Date.now().toString(36) + Math.random().toString(36).slice(2, 7); }
   function cur() { return state.chats.find(function (c) { return c.id === state.current; }); }
   function esc(s) {
@@ -237,7 +247,7 @@
       p = fetch(CFG.API_URL, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ mode: state.mode, subject: c.subject, messages: sendMsgs.slice(-12) })
+        body: JSON.stringify({ student_id: sid(), chat_id: c.id, mode: state.mode, subject: c.subject, messages: sendMsgs.slice(-12) })
       }).then(function (r) {
         return r.json().then(function (j) {
           if (!r.ok || j.error) throw new Error(j.error || "خطأ في الخادم");
