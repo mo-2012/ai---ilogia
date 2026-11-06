@@ -10,6 +10,20 @@
     simplify: "بسّط",
     practice: "اختبرني"
   };
+  var SERVICE_LINKS = {
+    "ilogia-eg.com": { name: "الموقع الرئيسي", href: "https://ilogia-eg.com/" },
+    "app.ilogia-eg.com": { name: "التطبيق الرئيسي", href: "https://app.ilogia-eg.com/" },
+    "ai.ilogia-eg.com": { name: "مساعد ilogia الذكي", href: "https://ai.ilogia-eg.com/" },
+    "arena.ilogia-eg.com": { name: "ساحة المنافسة", href: "https://arena.ilogia-eg.com/" },
+    "dashboard.ilogia-eg.com": { name: "لوحة تحكم الإدارة", href: "https://dashboard.ilogia-eg.com/" },
+    "teacher.ilogia-eg.com": { name: "لوحة تحكم المدرس", href: "https://teacher.ilogia-eg.com/" },
+    "exams.ilogia-eg.com": { name: "الاختبارات والامتحانات", href: "https://exams.ilogia-eg.com/" },
+    "cards.ilogia-eg.com": { name: "البطاقات التعليمية", href: "https://cards.ilogia-eg.com/" },
+    "planner.ilogia-eg.com": { name: "المخطط الدراسي", href: "https://planner.ilogia-eg.com/" },
+    "library.ilogia-eg.com": { name: "المكتبة التعليمية", href: "https://library.ilogia-eg.com/" },
+    "verify.ilogia-eg.com": { name: "التحقق من الشهادات", href: "https://verify.ilogia-eg.com/" },
+    "api.ilogia-eg.com": { name: "واجهة API", href: "https://api.ilogia-eg.com/" }
+  };
   var STARTS = [
     { m: "explain", icon: "i-bulb", t: "اشرح لي درسًا", s: "اكتب اسم الدرس أو الصق نصه" },
     { m: "summarize", icon: "i-file", t: "لخّص لي نصًا", s: "الصق نص المذاكرة أو أرفق ملفًا" },
@@ -18,22 +32,136 @@
   ];
 
   var state = { chats: [], current: null, mode: "explain", file: null, busy: false };
+  var chatsLoaded = false;
+  var AUTH_KEY = "ilogia_session_v1", authSession = null, authMode = "signin";
+  var SB_URL = (CFG.SUPABASE_URL || "").replace(/\/$/, "");
+  var authReady = Promise.resolve();
 
   function load() {
-    try { state.chats = JSON.parse(localStorage.getItem(KEY)) || []; } catch (e) { state.chats = []; }
+    var userId = authSession && authSession.user && authSession.user.id;
+    var key = userId ? KEY + ":" + userId : KEY;
+    try { state.chats = JSON.parse(localStorage.getItem(key)) || []; } catch (e) { state.chats = []; }
+    chatsLoaded = true;
   }
   function save() {
-    try { localStorage.setItem(KEY, JSON.stringify(state.chats)); } catch (e) {}
+    if (!chatsLoaded) return;
+    var userId = authSession && authSession.user && authSession.user.id;
+    var key = userId ? KEY + ":" + userId : KEY;
+    try { localStorage.setItem(key, JSON.stringify(state.chats)); } catch (e) {}
   }
-  // معرّف مجهول ثابت للطالب (يُحفظ في المتصفح) لربط تقدّمه في قاعدة البيانات
-  function sid() {
-    var k = "ilogia_student_id", v = null;
-    try { v = localStorage.getItem(k); } catch (e) {}
-    if (!v || !/^[a-zA-Z0-9-]{16,64}$/.test(v)) {
-      v = (window.crypto && crypto.randomUUID) ? crypto.randomUUID() : (uid() + uid() + uid());
-      try { localStorage.setItem(k, v); } catch (e) {}
+  function loadCurrentAccountChats() {
+    load();
+    state.current = state.chats.length ? state.chats[0].id : null;
+    renderAll();
+  }
+  function authRequest(path, body, token) {
+    var headers = { "Content-Type": "application/json", apikey: CFG.SUPABASE_KEY };
+    if (token) headers.Authorization = "Bearer " + token;
+    return fetch(SB_URL + path, {
+      method: "POST",
+      headers: headers,
+      body: JSON.stringify(body || {})
+    }).then(function (response) {
+      return response.json().catch(function () { return {}; }).then(function (data) {
+        if (!response.ok) {
+          var message = data.msg || data.message || (data.error && data.error.message) || data.error_description;
+          throw new Error(message || "تعذّر إكمال طلب الحساب.");
+        }
+        return data;
+      });
+    });
+  }
+  function saveAuthSession(data) {
+    if (!data || !data.access_token) return false;
+    var previousUserId = authSession && authSession.user && authSession.user.id;
+    var nextUserId = data.user && data.user.id;
+    var accountChanged = previousUserId !== nextUserId && !!nextUserId;
+    if (accountChanged) save();
+    authSession = {
+      access_token: data.access_token,
+      refresh_token: data.refresh_token || (authSession && authSession.refresh_token),
+      expires_at: Math.floor(Date.now() / 1000) + (parseInt(data.expires_in, 10) || 3600),
+      user: data.user || (authSession && authSession.user) || null
+    };
+    try { localStorage.setItem(AUTH_KEY, JSON.stringify(authSession)); } catch (e) {}
+    renderAccount();
+    if (accountChanged && chatsLoaded) loadCurrentAccountChats();
+    return true;
+  }
+  function clearAuthSession() {
+    var hadAccount = !!(authSession && authSession.user && authSession.user.id);
+    if (hadAccount) save();
+    authSession = null;
+    try { localStorage.removeItem(AUTH_KEY); } catch (e) {}
+    renderAccount();
+    if (hadAccount && chatsLoaded) loadCurrentAccountChats();
+  }
+  function refreshAuthSession() {
+    if (!authSession) return Promise.resolve(null);
+    if (!authSession.refresh_token) {
+      clearAuthSession();
+      return Promise.resolve(null);
     }
-    return v;
+    return authRequest("/auth/v1/token?grant_type=refresh_token", { refresh_token: authSession.refresh_token })
+      .then(function (data) {
+        saveAuthSession(data);
+        return authSession && authSession.access_token;
+      }).catch(function (error) {
+        clearAuthSession();
+        throw error;
+      });
+  }
+  function restoreAuthSession() {
+    try { authSession = JSON.parse(localStorage.getItem(AUTH_KEY) || "null"); } catch (e) { authSession = null; }
+    if (!authSession || !authSession.access_token) {
+      authSession = null;
+      renderAccount();
+      return Promise.resolve();
+    }
+    renderAccount();
+    if (!authSession.expires_at || authSession.expires_at < Math.floor(Date.now() / 1000) + 60) {
+      return refreshAuthSession().catch(function (error) {
+        hint("انتهت جلسة الدخول. سجّل الدخول مجددًا لربط تقدمك.", true);
+        console.error("Session refresh failed:", error);
+      });
+    }
+    return Promise.resolve();
+  }
+  function getAccessToken() {
+    if (!authSession || !authSession.access_token) return Promise.resolve(null);
+    if (authSession.expires_at > Math.floor(Date.now() / 1000) + 60) return Promise.resolve(authSession.access_token);
+    return refreshAuthSession();
+  }
+  function renderAccount() {
+    var button = $("accountBtn");
+    if (!button) return;
+    button.textContent = authSession && authSession.user && authSession.user.email
+      ? authSession.user.email
+      : "تسجيل الدخول";
+    button.title = authSession ? "تسجيل الخروج" : "تسجيل الدخول لربط تقدمك";
+  }
+  function setAuthMode(mode) {
+    authMode = mode;
+    var signingUp = mode === "signup";
+    $("authTitle").textContent = signingUp ? "إنشاء حساب" : "تسجيل الدخول";
+    $("authDescription").textContent = signingUp
+      ? "أنشئ حسابًا لربط تقدمك الدراسي."
+      : "سجّل الدخول لربط تقدمك الدراسي بحسابك.";
+    $("authSubmit").textContent = signingUp ? "إنشاء الحساب" : "دخول";
+    $("authToggle").textContent = signingUp ? "لديك حساب؟ سجّل الدخول" : "إنشاء حساب جديد";
+    $("authPassword").autocomplete = signingUp ? "new-password" : "current-password";
+  }
+  function signOut() {
+    getAccessToken().then(function (token) {
+      if (!token) return;
+      return authRequest("/auth/v1/logout?scope=local", {}, token);
+    }).then(function () {
+      clearAuthSession();
+    }).catch(function (error) {
+      console.error("Supabase sign-out failed:", error);
+      clearAuthSession();
+      hint("تم تسجيل الخروج من هذا المتصفح، لكن تعذّر إنهاء الجلسة لدى Supabase.", true);
+    });
   }
   function uid() { return Date.now().toString(36) + Math.random().toString(36).slice(2, 7); }
   function cur() { return state.chats.find(function (c) { return c.id === state.current; }); }
@@ -45,7 +173,31 @@
 
   // ---------- عرض النص (Markdown مبسّط وآمن) ----------
   function inline(s) {
-    return esc(s).replace(/\*\*(.+?)\*\*/g, "<strong>$1</strong>").replace(/`(.+?)`/g, "<code>$1</code>");
+    var links = [];
+    var text = s.replace(/\[([^\]]+)\]\((https?:\/\/[^\s)]+)\)/g, function (match, label, url) {
+      var service = serviceForUrl(url);
+      if (!service) return match;
+      links.push('<a href="' + esc(service.href) + '" target="_blank" rel="noopener noreferrer">' + esc(label) + "</a>");
+      return "\uE000" + (links.length - 1) + "\uE001";
+    });
+    text = text.replace(/https?:\/\/[^\s<>"']+/g, function (url) {
+      var trimmed = url.replace(/[.,،؛!?؟]+$/g, "");
+      var service = serviceForUrl(trimmed);
+      if (!service) return url;
+      links.push('<a href="' + esc(service.href) + '" target="_blank" rel="noopener noreferrer">' + esc(service.name) + "</a>");
+      return "\uE000" + (links.length - 1) + "\uE001" + url.slice(trimmed.length);
+    });
+    return esc(text).replace(/\*\*(.+?)\*\*/g, "<strong>$1</strong>")
+      .replace(/`(.+?)`/g, "<code>$1</code>")
+      .replace(/\uE000(\d+)\uE001/g, function (match, index) { return links[Number(index)] || ""; });
+  }
+  function serviceForUrl(value) {
+    try {
+      var url = new URL(value.replace(/&amp;/g, "&"));
+      return url.protocol === "https:" ? SERVICE_LINKS[url.hostname.toLowerCase()] : null;
+    } catch (e) {
+      return null;
+    }
   }
   function md(text) {
     var lines = text.split(/\r?\n/), out = [], list = null, para = [];
@@ -128,15 +280,37 @@
     var inner = document.createElement("div");
     inner.className = "inner";
     if (!c || !c.messages.length) {
+      inner.classList.add("welcome-inner");
       var w = document.createElement("div");
       w.className = "welcome";
-      w.innerHTML = "<h1>أهلًا! أنا مساعدك الدراسي</h1><p>اختر المادة ونوع المساعدة، ثم اكتب سؤالك أو الصق نص الدرس.</p>";
+      w.innerHTML = '<section class="welcome-hero">' +
+        '<div class="welcome-copy">' +
+        '<span class="welcome-kicker"><i></i> مساعدك الدراسي من ilogia</span>' +
+        '<h1>كل سؤال هو <span>بداية لفهم جديد</span></h1>' +
+        '<p>اشرح الدرس، بسّط فكرة صعبة، أو اختبر نفسك — وخلي مذاكرتك أوضح خطوة بخطوة.</p>' +
+        '<div class="welcome-points">' +
+        '<span><svg class="ic"><use href="#i-bulb"/></svg>شرح يناسبك</span>' +
+        '<span><svg class="ic"><use href="#i-file"/></svg>مراجعة مركّزة</span>' +
+        '<span><svg class="ic"><use href="#i-help"/></svg>تدريب تفاعلي</span>' +
+        '</div></div>' +
+        '<div class="welcome-visual" aria-hidden="true">' +
+        '<div class="visual-orbit orbit-one"></div><div class="visual-orbit orbit-two"></div>' +
+        '<div class="visual-note note-top"><svg class="ic"><use href="#i-bulb"/></svg><span>فهم أعمق</span></div>' +
+        '<div class="visual-card"><div class="visual-cap"><svg class="ic"><use href="#i-cap"/></svg></div>' +
+        '<small>مساحتك للتعلّم</small><strong>خطوة.. خطوة</strong>' +
+        '<div class="visual-progress"><i></i></div><span class="visual-caption">افهم · طبّق · تقدّم</span></div>' +
+        '<div class="visual-note note-bottom"><svg class="ic"><use href="#i-help"/></svg><span>تعلّم بطريقتك</span></div>' +
+        '</div></section>' +
+        '<div class="welcome-section"><div class="welcome-section-heading"><div><span>ابدأ من هنا</span>' +
+        '<h2>إيه اللي تحب تعمله النهارده؟</h2></div><small>اختار طريقة تساعدك في مذاكرتك</small></div></div>';
       var g = document.createElement("div");
       g.className = "starts";
       STARTS.forEach(function (s) {
         var b = document.createElement("button");
         b.className = "start";
-        b.innerHTML = '<svg class="ic"><use href="#' + s.icon + '"/></svg><div><b>' + s.t + "</b><span>" + s.s + "</span></div>";
+        b.innerHTML = '<span class="start-icon"><svg class="ic"><use href="#' + s.icon + '"/></svg></span>' +
+          '<span class="start-copy"><b>' + s.t + '</b><span class="start-desc">' + s.s + '</span></span>' +
+          '<span class="start-arrow" aria-hidden="true">↗</span>';
         b.onclick = function () { setMode(s.m); $("input").focus(); };
         g.appendChild(b);
       });
@@ -174,7 +348,7 @@
 
   function setStatus() {
     var s = $("status");
-    if (CFG.API_URL) { s.textContent = "متصل"; s.className = "status live"; }
+    if (SB_URL && CFG.SUPABASE_KEY) { s.textContent = "جاهز"; s.className = "status live"; }
     else { s.textContent = "وضع تجريبي"; s.className = "status demo"; }
   }
 
@@ -192,24 +366,6 @@
       practice: "**أسئلة تدريبية (نموذج تجريبي)**\n\n1) س: ما الفكرة الرئيسية في النص؟\nج: " + short + "\n\n2) س: اذكر مثالًا على الفكرة.\nج: هذا مثال توضيحي تجريبي."
     };
     return base[mode];
-  }
-
-  function callApi(c, text) {
-    var payload = {
-      mode: state.mode,
-      subject: c.subject,
-      messages: c.messages.slice(-12).map(function (m) { return { role: m.role, content: m.content }; })
-    };
-    return fetch(CFG.API_URL, {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify(payload)
-    }).then(function (r) {
-      return r.json().then(function (j) {
-        if (!r.ok || j.error) throw new Error(j.error || "خطأ في الخادم");
-        return j.reply;
-      });
-    });
   }
 
   function send(ev) {
@@ -242,25 +398,34 @@
     inner.appendChild(typing);
     $("thread").scrollTop = $("thread").scrollHeight;
 
-    var p;
-    if (CFG.API_URL) {
-      p = fetch(CFG.API_URL, {
+    var p = authReady.then(getAccessToken).then(function (token) {
+      if (!token) {
+        return new Promise(function (res) {
+          setTimeout(function () {
+            res({ content: demoReply(state.mode, full, c.subject), note: "سجّل الدخول للاتصال بـ Gemini." });
+          }, 500);
+        });
+      }
+      return fetch(SB_URL + "/functions/v1/ilogia-ai", {
         method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ student_id: sid(), chat_id: c.id, mode: state.mode, subject: c.subject, messages: sendMsgs.slice(-12) })
+        headers: {
+          "Content-Type": "application/json",
+          apikey: CFG.SUPABASE_KEY,
+          Authorization: "Bearer " + token
+        },
+        body: JSON.stringify({
+          mode: state.mode,
+          subject: c.subject,
+          messages: sendMsgs.slice(-12)
+        })
       }).then(function (r) {
-        return r.json().then(function (j) {
+        return r.json().catch(function () { return {}; }).then(function (j) {
+          if (r.status === 401) clearAuthSession();
           if (!r.ok || j.error) throw new Error(j.error || "خطأ في الخادم");
           return { content: j.reply };
         });
       });
-    } else {
-      p = new Promise(function (res) {
-        setTimeout(function () {
-          res({ content: demoReply(state.mode, full, c.subject), note: "هذا رد تجريبي. فعّل الاتصال بالذكاء الاصطناعي من ملف config.js." });
-        }, 700);
-      });
-    }
+    });
     p.then(function (r) {
       c.messages.push({ role: "assistant", content: r.content, note: r.note });
     }).catch(function (e) {
@@ -290,7 +455,55 @@
 
   // ---------- ربط الأحداث ----------
   function init() {
-    load(); setStatus();
+    load();
+    setStatus();
+    if (SB_URL && CFG.SUPABASE_KEY) {
+      authReady = restoreAuthSession();
+      load();
+    }
+    else authReady = Promise.resolve();
+    if (!chatsLoaded) load();
+    $("accountBtn").onclick = function () {
+      if (authSession) {
+        if (state.busy) { hint("انتظر حتى تنتهي الإجابة قبل تسجيل الخروج.", true); return; }
+        if (confirm("هل تريد تسجيل الخروج؟")) signOut();
+        return;
+      }
+      if (!SB_URL || !CFG.SUPABASE_KEY) {
+        hint("تسجيل الدخول غير مهيأ. أضف إعدادات Supabase العامة إلى config.js.", true);
+        return;
+      }
+      $("authError").textContent = "";
+      setAuthMode("signin");
+      $("authDialog").showModal();
+    };
+    $("authClose").onclick = function () { $("authDialog").close(); };
+    $("authToggle").onclick = function () {
+      $("authError").textContent = "";
+      setAuthMode(authMode === "signin" ? "signup" : "signin");
+    };
+    $("authForm").addEventListener("submit", function (event) {
+      event.preventDefault();
+      var email = $("authEmail").value.trim();
+      var password = $("authPassword").value;
+      var endpoint = authMode === "signup" ? "/auth/v1/signup" : "/auth/v1/token?grant_type=password";
+      $("authSubmit").disabled = true;
+      $("authError").textContent = "";
+      authRequest(endpoint, { email: email, password: password }).then(function (data) {
+        if (!saveAuthSession(data)) {
+          $("authError").textContent = "تم إنشاء الحساب. راجع بريدك الإلكتروني لتأكيده، ثم سجّل الدخول.";
+          setAuthMode("signin");
+          return;
+        }
+        $("authPassword").value = "";
+        $("authDialog").close();
+        hint("");
+      }).catch(function (error) {
+        $("authError").textContent = error.message;
+      }).then(function () {
+        $("authSubmit").disabled = false;
+      });
+    });
     $("modes").addEventListener("click", function (e) {
       var b = e.target.closest("button[data-mode]");
       if (b) setMode(b.dataset.mode);
@@ -316,7 +529,6 @@
     document.addEventListener("keydown", function (e) { if (e.key === "Escape") closeSide(); });
     if (state.chats.length) state.current = state.chats[0].id;
     renderAll();
-    $("hint").textContent = "";
   }
   init();
 })();

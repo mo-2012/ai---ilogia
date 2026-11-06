@@ -60,6 +60,7 @@
           <option value="الجغرافيا">الجغرافيا</option>
         </select>
       </label>
+      <button class="btn account" id="accountBtn" type="button">تسجيل الدخول</button>
       <span class="status" id="status" role="status"></span>
     </header>
 
@@ -86,6 +87,22 @@
     </footer>
   </main>
 </div>
+<dialog class="auth-dialog" id="authDialog" aria-labelledby="authTitle">
+  <form id="authForm">
+    <button class="icon-btn auth-close" id="authClose" type="button" aria-label="إغلاق"><svg class="ic"><use href="#i-x"/></svg></button>
+    <h2 id="authTitle">تسجيل الدخول</h2>
+    <p id="authDescription">سجّل الدخول لربط تقدمك الدراسي بحسابك.</p>
+    <label class="auth-field">البريد الإلكتروني
+      <input id="authEmail" type="email" autocomplete="email" required maxlength="254">
+    </label>
+    <label class="auth-field">كلمة المرور
+      <input id="authPassword" type="password" autocomplete="current-password" required minlength="6" maxlength="128">
+    </label>
+    <p class="auth-error" id="authError" role="alert"></p>
+    <button class="btn primary block" id="authSubmit" type="submit">دخول</button>
+    <button class="auth-toggle" id="authToggle" type="button">إنشاء حساب جديد</button>
+  </form>
+</dialog>
 <script src="app.js"></script>
 </body>
 </html>
