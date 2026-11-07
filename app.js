@@ -36,6 +36,8 @@
   var AUTH_KEY = "ilogia_session_v1", authSession = null, authMode = "signin";
   var SB_URL = (CFG.SUPABASE_URL || "").replace(/\/$/, "");
   var authReady = Promise.resolve();
+  var cloudChatsReady = false, cloudLoadGeneration = 0;
+  var cloudWriteQueue = Promise.resolve();
 
   function load() {
     var userId = authSession && authSession.user && authSession.user.id;
@@ -43,16 +45,171 @@
     try { state.chats = JSON.parse(localStorage.getItem(key)) || []; } catch (e) { state.chats = []; }
     chatsLoaded = true;
   }
-  function save() {
+  function save(touchCurrent) {
     if (!chatsLoaded) return;
+    var current = cur();
+    if (touchCurrent !== false) {
+      if (current) current.updatedAt = Date.now();
+    }
     var userId = authSession && authSession.user && authSession.user.id;
     var key = userId ? KEY + ":" + userId : KEY;
     try { localStorage.setItem(key, JSON.stringify(state.chats)); } catch (e) {}
+    if (touchCurrent !== false && userId && cloudChatsReady && current) queueCloudRows(userId, [current]);
   }
   function loadCurrentAccountChats() {
+    cloudChatsReady = false;
+    cloudLoadGeneration++;
+    var userId = authSession && authSession.user && authSession.user.id;
+    var anonymousChats = [];
+    if (userId) {
+      try { anonymousChats = JSON.parse(localStorage.getItem(KEY) || "[]"); } catch (e) { anonymousChats = []; }
+      if (!Array.isArray(anonymousChats)) anonymousChats = [];
+    }
     load();
+    if (userId) {
+      var knownIds = new Set(state.chats.map(function (chat) { return chat.id; }));
+      anonymousChats.forEach(function (chat) {
+        if (chat && chat.id && !knownIds.has(chat.id)) {
+          state.chats.push(chat);
+          knownIds.add(chat.id);
+        }
+      });
+      save(false);
+    }
     state.current = state.chats.length ? state.chats[0].id : null;
     renderAll();
+    if (userId) loadAccountChatsFromCloud(userId, cloudLoadGeneration);
+  }
+  function cloudRequest(path, method, body, token) {
+    var headers = { apikey: CFG.SUPABASE_KEY, Authorization: "Bearer " + token };
+    if (body !== undefined) headers["Content-Type"] = "application/json";
+    if (method === "POST") headers.Prefer = "resolution=merge-duplicates,return=minimal";
+    return fetch(SB_URL + path, {
+      method: method,
+      headers: headers,
+      body: body === undefined ? undefined : JSON.stringify(body)
+    }).then(function (response) {
+      if (response.ok) return;
+      return response.json().catch(function () { return {}; }).then(function (data) {
+        throw new Error(cloudErrorMessage(data, "تعذّر مزامنة المحادثات مع قاعدة البيانات (HTTP " + response.status + ")."));
+      });
+    });
+  }
+  function cloudErrorMessage(data, fallback) {
+    return data.message || data.msg || (data.error && data.error.message) ||
+      data.details || data.hint || data.error_description || fallback;
+  }
+  function queueCloudOperation(userId, operation) {
+    var tokenPromise = getAccessToken();
+    cloudWriteQueue = cloudWriteQueue.then(function () {
+      return tokenPromise.then(function (token) {
+        if (!token || !authSession || !authSession.user || authSession.user.id !== userId) return;
+        return operation(token);
+      });
+    }).catch(function (error) {
+      console.error("Chat sync failed:", error);
+      if (authSession && authSession.user && authSession.user.id === userId) {
+        hint("تعذّرت مزامنة المحادثات: " + error.message, true);
+      }
+    });
+    return cloudWriteQueue;
+  }
+  function chatRow(chat, userId) {
+    var updatedAt = Number(chat.updatedAt);
+    if (!Number.isFinite(updatedAt) || updatedAt <= 0) updatedAt = Date.now();
+    return {
+      user_id: userId,
+      id: chat.id,
+      title: chat.title,
+      subject: chat.subject,
+      messages: chat.messages,
+      updated_at: new Date(updatedAt).toISOString()
+    };
+  }
+  function queueCloudRows(userId, chats) {
+    if (!authSession || !authSession.user || authSession.user.id !== userId || !cloudChatsReady) return cloudWriteQueue;
+    var rows = chats.map(function (chat) { return chatRow(chat, userId); });
+    if (!rows.length) return cloudWriteQueue;
+    return queueCloudOperation(userId, function (token) {
+      return rows.reduce(function (pending, row) {
+        return pending.then(function () {
+          return cloudRequest("/rest/v1/chat_conversations?on_conflict=user_id,id", "POST", [row], token);
+        });
+      }, Promise.resolve());
+    });
+  }
+  function flushCloudSave() {
+    return cloudWriteQueue;
+  }
+  function deleteCloudChat(userId, chatId) {
+    if (!userId || !cloudChatsReady) return;
+    var params = new URLSearchParams({ user_id: "eq." + userId, id: "eq." + chatId });
+    queueCloudOperation(userId, function (token) {
+      return cloudRequest("/rest/v1/chat_conversations?" + params.toString(), "DELETE", undefined, token);
+    });
+  }
+  function loadAccountChatsFromCloud(userId, generation) {
+    getAccessToken().then(function (token) {
+      if (!token) throw new Error("انتهت جلسة الدخول. سجّل الدخول مجددًا لمزامنة المحادثات.");
+      var params = new URLSearchParams({
+        select: "id,title,subject,messages,updated_at",
+        user_id: "eq." + userId,
+        order: "updated_at.desc"
+      });
+      return fetch(SB_URL + "/rest/v1/chat_conversations?" + params.toString(), {
+        headers: { apikey: CFG.SUPABASE_KEY, Authorization: "Bearer " + token },
+        cache: "no-store"
+      }).then(function (response) {
+        if (!response.ok) {
+          return response.json().catch(function () { return {}; }).then(function (data) {
+            throw new Error(cloudErrorMessage(data, "تعذّر تحميل المحادثات من قاعدة البيانات (HTTP " + response.status + ")."));
+          });
+        }
+        return response.json();
+      });
+    }).then(function (rows) {
+      if (generation !== cloudLoadGeneration || !authSession || !authSession.user || authSession.user.id !== userId) return;
+      var merged = {};
+      var chatsToUpload = [];
+      rows.forEach(function (row) {
+        if (!row || typeof row.id !== "string" || !Array.isArray(row.messages)) return;
+        merged[row.id] = {
+          id: row.id,
+          title: row.title || "",
+          subject: row.subject || "عام",
+          messages: row.messages,
+          updatedAt: Date.parse(row.updated_at) || 0
+        };
+      });
+      state.chats.forEach(function (chat) {
+        var local = Object.assign({}, chat, { updatedAt: Number(chat.updatedAt) || 0 });
+        if (!merged[local.id] || local.updatedAt > merged[local.id].updatedAt) {
+          merged[local.id] = local;
+          chatsToUpload.push(local);
+        }
+      });
+      var currentId = state.current;
+      state.chats = Object.keys(merged).map(function (id) { return merged[id]; })
+        .sort(function (a, b) { return b.updatedAt - a.updatedAt; });
+      state.current = state.chats.some(function (chat) { return chat.id === currentId; })
+        ? currentId
+        : state.chats.length ? state.chats[0].id : null;
+      cloudChatsReady = true;
+      save(false);
+      renderAll();
+      if (chatsToUpload.length) {
+        hint("");
+        queueCloudRows(userId, chatsToUpload);
+      } else if (!state.chats.length) {
+        hint("لا توجد محادثات محفوظة لهذا الحساب بعد. المحادثات القديمة على جهاز آخر تحتاج فتح الموقع عليه وتسجيل الدخول مرة واحدة لرفعها.", true);
+      } else {
+        hint("");
+      }
+    }).catch(function (error) {
+      if (generation !== cloudLoadGeneration || !authSession || !authSession.user || authSession.user.id !== userId) return;
+      console.error("Chat history load failed:", error);
+      hint("تعذّر تحميل المحادثات: " + error.message, true);
+    });
   }
   function authRequest(path, body, token) {
     var headers = { "Content-Type": "application/json", apikey: CFG.SUPABASE_KEY };
@@ -152,7 +309,7 @@
     $("authPassword").autocomplete = signingUp ? "new-password" : "current-password";
   }
   function signOut() {
-    getAccessToken().then(function (token) {
+    flushCloudSave().then(function () { return getAccessToken(); }).then(function (token) {
       if (!token) return;
       return authRequest("/auth/v1/logout?scope=local", {}, token);
     }).then(function () {
@@ -254,8 +411,10 @@
       o.onclick = function () { openChat(c.id); closeSide(); };
       d.querySelector(".del").onclick = function () {
         if (!confirm("حذف هذه المحادثة؟")) return;
+        var userId = authSession && authSession.user && authSession.user.id;
         state.chats = state.chats.filter(function (x) { return x.id !== c.id; });
-        save();
+        save(false);
+        deleteCloudChat(userId, c.id);
         if (state.current === c.id) state.current = null;
         renderAll();
       };
@@ -458,7 +617,9 @@
     load();
     setStatus();
     if (SB_URL && CFG.SUPABASE_KEY) {
-      authReady = restoreAuthSession();
+      authReady = restoreAuthSession().then(function () {
+        if (authSession && authSession.user && authSession.user.id) loadCurrentAccountChats();
+      });
       load();
     }
     else authReady = Promise.resolve();
